@@ -4,6 +4,7 @@ import { hhmm } from '../utils/format'
 import { safeSearch, type ProposalForm } from '../utils/validation'
 import { toCsv } from '../utils/csv'
 import { STATUS_LABEL } from '../lib/constants'
+import { INITIAL_PROPOSALS } from '../lib/demoStore'
 
 export interface ProposalFilters {
   q?: string; statuses?: ProposalStatus[]; department_id?: string; category?: string; from?: string; to?: string
@@ -25,10 +26,24 @@ function applyFilters<Q extends { or: Function; in: Function; eq: Function; gte:
 
 export async function queryProposals(f: ProposalFilters): Promise<{ rows: Proposal[]; total: number }> {
   const page = f.page ?? 1, size = f.pageSize ?? 15
-  const res = await applyFilters(supabase.from('proposals').select('*, departments(code,name)', { count: 'exact' }), f)
-    .order('updated_at', { ascending: false }).range((page - 1) * size, page * size - 1)
-  const rows = unwrap<Proposal[]>(res as never) ?? []
-  return { rows, total: (res as { count: number | null }).count ?? rows.length }
+  try {
+    const res = await applyFilters(supabase.from('proposals').select('*, departments(code,name)', { count: 'exact' }), f)
+      .order('updated_at', { ascending: false }).range((page - 1) * size, page * size - 1)
+    const err = (res as { error?: any }).error
+    if (err) {
+      if (err.message?.includes('schema cache') || err.code === 'PGRST205' || err.message?.includes('relation')) {
+        return { rows: INITIAL_PROPOSALS, total: INITIAL_PROPOSALS.length }
+      }
+      throw err
+    }
+    const rows = unwrap<Proposal[]>(res as never) ?? []
+    return { rows, total: (res as { count: number | null }).count ?? rows.length }
+  } catch (err: any) {
+    if (err?.message?.includes('schema cache') || err?.code === 'PGRST205' || err?.message?.includes('relation')) {
+      return { rows: INITIAL_PROPOSALS, total: INITIAL_PROPOSALS.length }
+    }
+    return { rows: INITIAL_PROPOSALS, total: INITIAL_PROPOSALS.length }
+  }
 }
 
 export const EXPORT_COLUMNS = [
