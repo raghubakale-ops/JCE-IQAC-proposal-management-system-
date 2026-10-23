@@ -4,6 +4,7 @@ import { supabase, configured } from '../lib/supabase'
 import { DOMAIN } from '../lib/constants'
 import { friendlyError } from '../lib/errors'
 import type { Profile } from '../types'
+import { DEMO_PROFILES } from '../lib/demoStore'
 
 interface AuthCtx {
   loading: boolean; session: Session | null; profile: Profile | null; noRole: boolean; authError: string | null
@@ -24,23 +25,47 @@ function oauthErrorFromUrl(): string | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [loading, setLoading] = useState(configured)
-  const [session, setSession] = useState<Session | null>(null)
-  const [profile, setProfile] = useState<Profile | null>(null)
+  const demoEmail = typeof window !== 'undefined' ? localStorage.getItem('jce_iqac_demo_user') : null
+  const initialSession: Session | null = demoEmail ? ({
+    access_token: 'demo-token',
+    token_type: 'bearer',
+    expires_in: 3600,
+    refresh_token: 'demo-refresh',
+    user: {
+      id: DEMO_PROFILES[demoEmail]?.id ?? 'user-demo',
+      aud: 'authenticated',
+      role: 'authenticated',
+      email: demoEmail,
+      app_metadata: { provider: 'email' },
+      user_metadata: {},
+      created_at: new Date().toISOString(),
+    }
+  } as unknown as Session) : null
+
+  const [loading, setLoading] = useState(configured && !demoEmail)
+  const [session, setSession] = useState<Session | null>(initialSession)
+  const [profile, setProfile] = useState<Profile | null>(demoEmail ? (DEMO_PROFILES[demoEmail] ?? null) : null)
   const [noRole, setNoRole] = useState(false)
   const [authError, setAuthError] = useState<string | null>(() => oauthErrorFromUrl())
   const [tick, setTick] = useState(0)
 
   useEffect(() => {
+    if (demoEmail) {
+      setSession(initialSession)
+      setProfile(DEMO_PROFILES[demoEmail] ?? null)
+      setLoading(false)
+      return
+    }
     if (!configured) return
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); if (!data.session) setLoading(false) })
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { setSession(s); if (!s) { setProfile(null); setNoRole(false); setLoading(false) } })
     return () => sub.subscription.unsubscribe()
-  }, [])
+  }, [demoEmail])
 
   const uid = session?.user.id
   const email = session?.user.email?.toLowerCase()
   useEffect(() => {
+    if (demoEmail) return
     if (!uid) return
     let cancelled = false
     ;(async () => {
@@ -56,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
     })()
     return () => { cancelled = true }
-  }, [uid, email, tick])
+  }, [uid, email, tick, demoEmail])
 
   const signIn = useCallback(async () => {
     setAuthError(null)
@@ -66,7 +91,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
     if (error) setAuthError(friendlyError(error))
   }, [])
-  const signOut = useCallback(async () => { await supabase.auth.signOut(); setProfile(null); setNoRole(false) }, [])
+  const signOut = useCallback(async () => {
+    localStorage.removeItem('jce_iqac_demo_user')
+    await supabase.auth.signOut().catch(() => {})
+    setSession(null)
+    setProfile(null)
+    setNoRole(false)
+    window.location.reload()
+  }, [])
   const reloadProfile = useCallback(() => setTick((t) => t + 1), [])
 
   const value = useMemo(() => ({ loading, session, profile, noRole, authError, signIn, signOut, reloadProfile }),
